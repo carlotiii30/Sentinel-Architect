@@ -20,7 +20,6 @@ class ArchitectureResponse(BaseModel):
     security_summary: str = Field(
         description="Executive summary of the security posture"
     )
-    # --- NEW FIELD ---
     validation_checklist: List[str] = Field(
         description="5 critical security checks to verify this deployment"
     )
