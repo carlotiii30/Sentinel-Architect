@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  webapp:
+    # Security Rationale: Build the web application image from a Dockerfile.
+    # This allows for custom hardening, multi-stage builds, and running as a non-root user.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Security Rationale: Use environment variables for sensitive data.
+    # IMPORTANT: For production environments, Docker Compose environment variables are NOT secure.
+    # Consider using Docker Secrets (for Swarm) or a dedicated secrets management solution (e.g., HashiCorp Vault, AWS Secrets Manager)
+    # for true production-grade secret management.
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/mydatabase # Connects to the 'db' service
+      SECRET_KEY: your_django_secret_key_here # Replace with a strong, randomly generated key
+      DJANGO_SETTINGS_MODULE: your_app_name.settings
+      # Add other environment variables as needed for your application
+    # Security Rationale: Map the container's internal port to a host port.
+    # Only expose necessary ports.
+    ports:
+      - "8000:8000"
+    # Security Rationale: Mount the application code into the container.
+    # For production, consider baking the code directly into the image to avoid runtime changes.
+    volumes:
+      - ./app:/app
+    # Security Rationale: Connect the web app to a private network.
+    # This isolates it from other potential containers and the host network, enhancing security.
+    networks:
+      - app_network
+    # Security Rationale: Ensure the database service is healthy before starting the web app.
+    # This prevents the web app from trying to connect to an unready database.
+    depends_on:
+      db:
+        condition: service_healthy
+    # Security Rationale: Limit CPU and memory resources to prevent resource exhaustion attacks
+    # and ensure fair resource distribution on the host. This adheres to the principle of least privilege.
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5' # Limit to 50% of one CPU core
+          memory: '512M' # Limit to 512 MB of RAM
+    # Security Rationale: Configure the container to restart automatically if it stops or fails.
+    # This improves application availability and resilience.
+    restart: unless-stopped
+    # Security Rationale: Implement a health check to verify the application is running and responsive.
+    # This allows Docker Compose to determine the service's actual health, crucial for 'depends_on: service_healthy'.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"] # IMPORTANT: Replace with an actual health endpoint in your app
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s # Give the app time to start before first health check
+
+  db:
+    # Security Rationale: Use a specific, lightweight PostgreSQL image (alpine variant).
+    # Alpine images have a smaller attack surface due to fewer installed packages.
+    image: postgres:13-alpine
+    # Security Rationale: Use environment variables for database credentials.
+    # IMPORTANT: As with the webapp, these are NOT secure for production.
+    # Use Docker Secrets or a dedicated secrets management solution.
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password # Replace with a strong, randomly generated password
+      # Security Rationale: Harden PostgreSQL authentication.
+      # Use SCRAM-SHA-256 for host and local connections, which is more secure than MD5.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    # Security Rationale: Mount a named volume for persistent database data.
+    # This ensures data is not lost if the container is removed or recreated.
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Security Rationale: Place the database in a private network.
+    # This prevents direct exposure of the database to the host or other unintended networks,
+    # enforcing the principle of least privilege and defense in depth.
+    networks:
+      - app_network
+    # Security Rationale: Limit CPU and memory resources for the database.
+    # Prevents resource exhaustion and ensures stability.
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '1024M' # PostgreSQL can be memory intensive
+    # Security Rationale: Configure the database container to restart automatically.
+    # Ensures database availability.
+    restart: unless-stopped
+    # Security Rationale: Implement a health check to verify the database is ready to accept connections.
+    # Crucial for 'depends_on: service_healthy' for the web app.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mydatabase"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s # Give the DB time to initialize before first health check
+
+# Security Rationale: Define a custom bridge network for service isolation.
+# Services on this network can communicate with each other but are isolated from the host's default bridge network.
+networks:
+  app_network:
+    driver: bridge
+
+# Security Rationale: Define named volumes for persistent data storage.
+# This decouples data from the container lifecycle.
+volumes:
+  db_data:
